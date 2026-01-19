@@ -28,6 +28,19 @@ def gibbs_sample_iter(ph: Array, key: Key, weights: Array, bh: Array, bv: Array)
     return ph, pv
 
 
+def calc_free_energy(v: Array, weights: Array, visible_biases: Array, hidden_biases: Array):
+    """
+    F(v) = -\sum_i v_i b_{v_i} - \sum_j \log (1 + e^{b_{h_j} + \sum_i v_i w_{ij}})
+
+    v is of shape (ensemble_dim, batch_dim, data_dim)
+    """
+    visible_biases_sum = -jnp.einsum("ebi,ei->eb", v, visible_biases)
+    hp = hidden_probs(v, weights, hidden_biases)
+    hidden_sum = -jnp.sum(jax.nn.softplus(hp), axis=-1)
+
+    return (visible_biases_sum + hidden_sum).mean(axis=-1)
+
+
 def cd_n(
     key: Key,
     data: Array,
@@ -77,14 +90,9 @@ def cd_n(
     hidden_biases = hidden_biases + lr * bh_grad
 
     # ---------------------- Energy -------------------------
+    F = calc_free_energy(data, weights, visible_biases, hidden_biases)
 
-    # E = -(data.dot(visible_biases)) -(ph_data.dot(hidden_biases)) -(data @ weights @ ph_data)
-    E_bv = -jnp.einsum("ebi,ei->e", data, visible_biases)
-    E_bh = -jnp.einsum("ebj,ej->e", ph_data, hidden_biases)
-    E_vh = -jnp.einsum("ebi,eij,ebj->e", data, weights, ph_data)
-    E = E_bv + E_bh + E_vh
-
-    return (weights, visible_biases, hidden_biases), E
+    return (weights, visible_biases, hidden_biases), F
 
 
 def _cd_n_minibatch_scan_fn(carry: Tuple[Array], xs: Tuple[Array], n: int, lr: float):
@@ -152,10 +160,10 @@ class RBMEnsemble(eqx.Module):
             M = len(batches)
             keys = jr.split(base_key, M)
 
-            weights, visible_biases, hidden_biases, E_hist = cd_n_scan(
+            weights, visible_biases, hidden_biases, F_hist = cd_n_scan(
                 keys, batches, weights, visible_biases, hidden_biases, n, M, lr
             )
-            rich.print(f" Epoch {e}, Energy {E_hist.mean(axis=0)}")
+            rich.print(f" Epoch {e}, Free energy {F_hist.mean(axis=0)}")
         
         return eqx.tree_at(
             where=lambda rbm: (rbm.weights, rbm.visible_biases, rbm.hidden_biases),
