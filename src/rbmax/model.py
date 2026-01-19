@@ -30,7 +30,7 @@ def gibbs_sample_iter(ph: Array, key: Key, weights: Array, bh: Array, bv: Array)
 
 def calc_free_energy(v: Array, weights: Array, visible_biases: Array, hidden_biases: Array):
     """
-    F(v) = -\sum_i v_i b_{v_i} - \sum_j \log (1 + e^{b_{h_j} + \sum_i v_i w_{ij}})
+    F(v) = -\\sum_i v_i b_{v_i} - \\sum_j \\log (1 + e^{b_{h_j} + \\sum_i v_i w_{ij}})
 
     v is of shape (ensemble_dim, batch_dim, data_dim)
     """
@@ -104,13 +104,13 @@ def _cd_n_minibatch_scan_fn(carry: Tuple[Array], xs: Tuple[Array], n: int, lr: f
 @partial(jax.jit, static_argnums=(5,6,7))
 def cd_n_scan(keys, batches, weights, visible_biases, hidden_biases, n, M, lr):
     scan_fn = partial(_cd_n_minibatch_scan_fn, n=n, lr=lr)
-    (weights, visible_biases, hidden_biases), E_hist = lax.scan(
+    (weights, visible_biases, hidden_biases), F_hist = lax.scan(
         scan_fn,
         (weights, visible_biases, hidden_biases),
         (keys, batches),
         length=M
     )
-    return weights, visible_biases, hidden_biases, E_hist
+    return weights, visible_biases, hidden_biases, F_hist
 
 
 class RBMEnsemble(eqx.Module):
@@ -147,10 +147,12 @@ class RBMEnsemble(eqx.Module):
     def generate(self, hidden_state: Array) -> Array:
         return visible_probs(hidden_state, self.weights, self.visible_biases)
 
-    def train_cd(self, data: Array, batch_size: int=16, n: int=1, lr: float=1e-2, epochs:int=20) -> "RBMEnsemble":
+    def train_cd(self, data: Array, batch_size: int=16, n: int=1, lr: float=1e-2, epochs:int=20, verbose:bool=False) -> "RBMEnsemble":
         ensemble_size = self.weights.shape[0]
 
         base_key = jr.PRNGKey(0)
+
+        F_hist = []
 
         weights, visible_biases, hidden_biases = self.weights, self.visible_biases, self.hidden_biases
 
@@ -160,13 +162,16 @@ class RBMEnsemble(eqx.Module):
             M = len(batches)
             keys = jr.split(base_key, M)
 
-            weights, visible_biases, hidden_biases, F_hist = cd_n_scan(
+            weights, visible_biases, hidden_biases, F_hist_epoch = cd_n_scan(
                 keys, batches, weights, visible_biases, hidden_biases, n, M, lr
             )
-            rich.print(f" Epoch {e}, Free energy {F_hist.mean(axis=0)}")
+            if verbose:
+                rich.print(f" Epoch {e}, Free energy {F_hist_epoch.mean(axis=0)}")
+            
+            F_hist.append(F_hist_epoch.mean())
         
         return eqx.tree_at(
             where=lambda rbm: (rbm.weights, rbm.visible_biases, rbm.hidden_biases),
             pytree=self,
             replace=(weights, visible_biases, hidden_biases)
-        )
+        ), jnp.array(F_hist)
