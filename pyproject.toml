@@ -1,7 +1,7 @@
 [project]
 name = "RBMax"
 version = "0.1.0"
-description = "Simple RBM (Restricted Boltzman Machine) implementation in JAX"
+description = "Simple RBM (Restricted Boltzmann Machine) implementation in JAX"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
